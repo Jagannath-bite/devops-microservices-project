@@ -1,16 +1,27 @@
-FROM node:14
+# ---------- Build Stage ----------
+FROM node:20-alpine AS builder
 
-ENV INSTANA_AUTO_PROFILE true
+WORKDIR /app
+
+COPY package*.json ./
+
+RUN npm ci --only=production
+
+COPY . .
+
+# ---------- Runtime Stage ----------
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Create non-root user
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+COPY --from=builder /app /app
+
+USER appuser
 
 EXPOSE 8080
-
-WORKDIR /opt/server
-
-COPY package.json /opt/server/
-
-RUN npm install
-
-COPY server.js /opt/server/
 
 CMD ["node", "server.js"]
 
