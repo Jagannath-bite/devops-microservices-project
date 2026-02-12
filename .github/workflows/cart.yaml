@@ -1,42 +1,56 @@
-name: Cart
+name: Cart CI/CD
 
 on:
   push:
-    branches:
-      - master
+    branches: [ "master" ]
     paths:
-      - '**.js'  # Only trigger on changes to Python files (**.py)
-      - '.github/workflows/cart.yaml'  # Include workflow file changes
-
-  pull_request:
-    branches:
-      - master
-    paths:
-      - '**.js'  # Only trigger on changes to Python files (**.py)
-      - '.github/workflows/cart.yaml'  # Include workflow file changes
+      - "services/cart/**"
+      - ".github/workflows/cart.yaml"
 
 jobs:
-  payment:
-    name: Build and deploy cart microservice
-    runs-on: [self-hosted]  # Use a standard runner instead of self-hosted
+  cart:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: us-east-1
+      ECR_REPO: 123456789012.dkr.ecr.us-east-1.amazonaws.com/cart-service
 
     steps:
-      - name: Checkout code 
-        uses: actions/checkout@v2
-        with:
-          fetch-depth: 0
 
-      - name: NPM install
-        run: npm install 
+    - name: Checkout
+      uses: actions/checkout@v3
 
-      - name: Build Docker image
-        run: |
-          docker build -t cart .  # Build image tagged as 'payment' from current directory
 
-      - name: Docker Login (use secrets)
-        run: docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_TOKEN }}
+    - name: Configure AWS
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
 
-      - name: Docker Push
-        run: |
-          docker tag cart ${name}/cart:latest
-          docker push ${name}/cart:latest
+
+    - name: Login to ECR
+      run: |
+        aws ecr get-login-password --region us-east-1 | \
+        docker login --username AWS --password-stdin $ECR_REPO
+
+
+    - name: Build Image
+      run: |
+        cd services/cart
+        docker build -t cart:${{ github.run_number }} .
+
+
+    - name: Tag & Push
+      run: |
+        docker tag cart:${{ github.run_number }} $ECR_REPO:${{ github.run_number }}
+        docker push $ECR_REPO:${{ github.run_number }}
+
+
+    - name: Deploy to EKS
+      run: |
+        aws eks update-kubeconfig --region us-east-1 --name devops-cluster
+
+        sed -i "s|IMAGE_TAG|${{ github.run_number }}|g" k8s/cart/deployment.yaml
+
+        kubectl apply -f k8s/cart/
