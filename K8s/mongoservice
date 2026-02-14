@@ -1,20 +1,11 @@
-apiVersion: apps/v1
-kind: Deployment
+---
+apiVersion: v1
+kind: Service
 metadata:
   name: mongo
   namespace: devops-project
 spec:
-  replicas: 1
   selector:
-    matchLabels:
-      app: mongo
-  template:
-    metadata:
-      labels:
-        app: mongo
-    spec:
-      containers:
-      - name: mongo
-        image: mongo:6
-        ports:
-        - containerPort: 27017
+    app: mongo
+  ports:
+    - port: 27017
