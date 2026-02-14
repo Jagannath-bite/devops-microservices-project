@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: devops-project
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+      - name: backend
+        image: localhost:5000/backend:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: MYSQL_HOST
+          value: mysql
+        - name: MONGO_HOST
+          value: mongo
