@@ -1,20 +1,13 @@
-apiVersion: apps/v1
-kind: Deployment
+---
+apiVersion: v1
+kind: Service
 metadata:
   name: frontend
   namespace: devops-project
 spec:
-  replicas: 2
+  type: NodePort
   selector:
-    matchLabels:
-      app: frontend
-  template:
-    metadata:
-      labels:
-        app: frontend
-    spec:
-      containers:
-      - name: frontend
-        image: localhost:5000/frontend:latest
-        ports:
-        - containerPort: 80
+    app: frontend
+  ports:
+    - port: 80
+      nodePort: 30007
