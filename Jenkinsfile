@@ -1,42 +1,40 @@
 pipeline {
-    agent any
+  agent any
 
-    environment {
-        REGISTRY = "localhost:5000"
-        NAMESPACE = "devops-project"
+  environment {
+    REGISTRY = "localhost:5000"
+    APP_REPO = "Jagannath-bite/devops-microservices-project"
+  }
+
+  stages {
+
+    stage('Checkout') {
+      steps {
+        git url: "https://github.com/${APP_REPO}.git"
+      }
     }
 
-    stages {
-
-        stage('Checkout') {
-            steps {
-                git 'https://github.com/Jagannath-bite/devops-microservices-project.git'
-            }
+    stage('Build & Push Images') {
+      steps {
+        script {
+          sh 'docker build -t ${REGISTRY}/cart-service:v1 ./services/cart'
+          sh 'docker push ${REGISTRY}/cart-service:v1'
         }
-
-        stage('Build Backend') {
-            steps {
-                sh 'docker build -t $REGISTRY/backend:latest backend/'
-            }
-        }
-
-        stage('Build Frontend') {
-            steps {
-                sh 'docker build -t $REGISTRY/frontend:latest frontend/'
-            }
-        }
-
-        stage('Push Images') {
-            steps {
-                sh 'docker push $REGISTRY/backend:latest'
-                sh 'docker push $REGISTRY/frontend:latest'
-            }
-        }
-
-        stage('Deploy to Kubernetes') {
-            steps {
-                sh 'kubectl apply -f k8s/'
-            }
-        }
+      }
     }
+
+    stage('Update K8s Manifests') {
+      steps {
+        script {
+          sh 'sed -i "s|image:.*|image: localhost:5000/cart-service:v1|" ./k8s/cart-deployment.yml'
+          sh 'git config user.email "ci@local.dev"'
+          sh 'git config user.name "CI"'
+          sh 'git add ./k8s/cart-deployment.yml'
+          sh 'git commit -m "Update image tag"'
+          sh 'git push origin main'
+        }
+      }
+    }
+
+  }
 }
