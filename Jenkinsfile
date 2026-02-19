@@ -15,23 +15,12 @@ pipeline {
             }
         }
 
-        stage('Configure AWS') {
-            steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-jenkins-creds']]) {
-                    sh '''
-                    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-                    echo "Account ID: $ACCOUNT_ID"
-                    echo "ACCOUNT_ID=$ACCOUNT_ID" > account.env
-                    '''
-                }
-            }
-        }
-
         stage('Login to ECR') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-jenkins-creds']]) {
                     sh '''
-                    source account.env
+                    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
                     aws ecr get-login-password --region $AWS_REGION | \
                     docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
                     '''
@@ -41,26 +30,28 @@ pipeline {
 
         stage('Build & Push Images') {
             steps {
-                script {
-                    def services = env.SERVICES.split(" ")
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-jenkins-creds']]) {
+                    script {
+                        def services = env.SERVICES.split(" ")
 
-                    for (svc in services) {
+                        for (svc in services) {
 
-                        sh """
-                        ACCOUNT_ID=\$(cat account.env | cut -d '=' -f2)
+                            sh """
+                            ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text)
 
-                        if [ -d services/${svc} ]; then
-                            docker build -t ${svc}:${BUILD_NUMBER} services/${svc}
-                        else
-                            docker build -t ${svc}:${BUILD_NUMBER} ${svc}
-                        fi
+                            if [ -d services/${svc} ]; then
+                                docker build -t ${svc}:${BUILD_NUMBER} services/${svc}
+                            else
+                                docker build -t ${svc}:${BUILD_NUMBER} ${svc}
+                            fi
 
-                        docker tag ${svc}:${BUILD_NUMBER} \
-                        \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/robot-shop/${svc}:${BUILD_NUMBER}
+                            docker tag ${svc}:${BUILD_NUMBER} \
+                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/robot-shop/${svc}:${BUILD_NUMBER}
 
-                        docker push \
-                        \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/robot-shop/${svc}:${BUILD_NUMBER}
-                        """
+                            docker push \
+                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/robot-shop/${svc}:${BUILD_NUMBER}
+                            """
+                        }
                     }
                 }
             }
@@ -70,7 +61,7 @@ pipeline {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-jenkins-creds']]) {
                     sh '''
-                    ACCOUNT_ID=$(cat account.env | cut -d '=' -f2)
+                    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
                     aws eks update-kubeconfig --region $AWS_REGION --name devops-cluster
 
