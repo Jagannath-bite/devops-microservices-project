@@ -1,40 +1,91 @@
 pipeline {
-  agent any
+    agent any
 
-  environment {
-    REGISTRY = "localhost:5000"
-    APP_REPO = "Jagannath-bite/devops-microservices-project"
-  }
-
-  stages {
-
-    stage('Checkout') {
-      steps {
-        git url: "https://github.com/${APP_REPO}.git"
-      }
+    environment {
+        AWS_REGION = "ap-southeast-1"
+        ACCOUNT_ID = ""
+        ECR_REGISTRY = ""
+        NAMESPACE = "robot-shop"
+        SERVICES = "user cart shipping payment ratings dispatch web mysql mongo redis rabbitmq"
     }
 
-    stage('Build & Push Images') {
-      steps {
-        script {
-          sh 'docker build -t ${REGISTRY}/cart-service:v1 ./services/cart'
-          sh 'docker push ${REGISTRY}/cart-service:v1'
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git 'https://github.com/Jagannath-bite/devops-microservices-project.git'
+            }
         }
-      }
-    }
 
-    stage('Update K8s Manifests') {
-      steps {
-        script {
-          sh 'sed -i "s|image:.*|image: localhost:5000/cart-service:v1|" ./k8s/cart-deployment.yml'
-          sh 'git config user.email "ci@local.dev"'
-          sh 'git config user.name "CI"'
-          sh 'git add ./k8s/cart-deployment.yml'
-          sh 'git commit -m "Update image tag"'
-          sh 'git push origin main'
+        stage('Configure AWS & EKS') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-jenkins-creds'
+                ]]) {
+
+                    script {
+                        ACCOUNT_ID = sh(
+                            script: "aws sts get-caller-identity --query Account --output text",
+                            returnStdout: true
+                        ).trim()
+
+                        ECR_REGISTRY = "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+                        sh """
+                        aws eks update-kubeconfig --region ${AWS_REGION} --name devops-cluster
+                        """
+
+                        echo "Connected to EKS"
+                    }
+                }
+            }
         }
-      }
-    }
 
-  }
-}
+        stage('Login to ECR') {
+            steps {
+                withCredentials([[
+                    $class: 'AmazonWebServicesCredentialsBinding',
+                    credentialsId: 'aws-jenkins-creds'
+                ]]) {
+                    sh '''
+                    aws ecr get-login-password --region $AWS_REGION | \
+                    docker login --username AWS --password-stdin $ECR_REGISTRY
+                    '''
+                }
+            }
+        }
+
+        stage('Build & Push Images') {
+            steps {
+                script {
+                    def services = SERVICES.split(" ")
+
+                    for (svc in services) {
+
+                        echo "Building ${svc}..."
+
+                        if (fileExists("services/${svc}/Dockerfile")) {
+                            sh """
+                            docker build -t ${svc}:${BUILD_NUMBER} services/${svc}
+                            """
+                        } else {
+                            sh """
+                            docker build -t ${svc}:${BUILD_NUMBER} ${svc}
+                            """
+                        }
+
+                        sh """
+                        docker tag ${svc}:${BUILD_NUMBER} \
+                        ${ECR_REGISTRY}/robot-shop/${svc}:${BUILD_NUMBER}
+
+                        docker push \
+                        ${ECR_REGISTRY}/robot-shop/${svc}:${BUILD_NUMBER}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Base Manifests') {
+            steps {
