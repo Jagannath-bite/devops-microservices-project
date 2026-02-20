@@ -2,18 +2,21 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend
-  spec:
-  replicas: 2
+  namespace: robot-shop
+spec:
+  replicas: 1
   selector:
     matchLabels:
       app: frontend
+
   template:
     metadata:
       labels:
         app: frontend
+
     spec:
       containers:
-      - name: frontend
-        image: localhost:5000/frontend:latest
-        ports:
-        - containerPort: 80
+        - name: frontend
+          image: robotshop/web:latest
+          ports:
+            - containerPort: 8080

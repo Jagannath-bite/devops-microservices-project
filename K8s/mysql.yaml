@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mysql
+  namespace: robot-shop
 spec:
   replicas: 1
   selector:
@@ -13,12 +14,10 @@ spec:
         app: mysql
     spec:
       containers:
-      - name: mysql
-        image: mysql:8
-        env:
-        - name: MYSQL_ROOT_PASSWORD
-          value: root
-        - name: MYSQL_DATABASE
-          value: appdb
-        ports:
-        - containerPort: 3306
+        - name: mysql
+          image: mysql:5.7
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: password
+          ports:
+            - containerPort: 3306

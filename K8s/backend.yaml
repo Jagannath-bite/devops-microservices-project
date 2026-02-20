@@ -2,23 +2,21 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: backend
-  spec:
-  replicas: 2
+  namespace: robot-shop
+spec:
+  replicas: 1
   selector:
     matchLabels:
       app: backend
+
   template:
     metadata:
       labels:
         app: backend
+
     spec:
       containers:
-      - name: backend
-        image: localhost:5000/backend:latest
-        ports:
-        - containerPort: 8080
-        env:
-        - name: MYSQL_HOST
-          value: mysql
-        - name: MONGO_HOST
-          value: mongo
+        - name: backend
+          image: robotshop/rs-user:latest
+          ports:
+            - containerPort: 8080
