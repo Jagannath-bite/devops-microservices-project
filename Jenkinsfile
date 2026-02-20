@@ -4,8 +4,11 @@ pipeline {
     environment {
         AWS_REGION = "ap-southeast-1"
         CLUSTER_NAME = "devops-cluster"
+        ECR_REPO = "robot-shop"
         NAMESPACE = "robot-shop"
-        REPO_NAME = "robot-shop"
+
+        APP_SERVICES = "user cart shipping payment ratings dispatch web"
+        INFRA_SERVICES = "mysql mongo redis rabbitmq"
     }
 
     stages {
@@ -17,14 +20,14 @@ pipeline {
             }
         }
 
-        stage('Detect Services') {
+        stage('Verify Repo Structure') {
             steps {
-                script {
-                    APP_SERVICES = sh(
-                        script: "ls services",
-                        returnStdout: true
-                    ).trim().split()
-                }
+                sh '''
+                echo "Repository structure:"
+                ls -la
+                echo "Services folder:"
+                ls -la services || true
+                '''
             }
         }
 
@@ -32,7 +35,9 @@ pipeline {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-jenkins-creds']]) {
                     sh '''
-                    aws sts get-caller-identity
+                    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+                    echo "Account: $ACCOUNT_ID"
+                    echo $ACCOUNT_ID > account_id.txt
                     '''
                 }
             }
@@ -42,58 +47,77 @@ pipeline {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-jenkins-creds']]) {
                     sh '''
-                    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+                    ACCOUNT_ID=$(cat account_id.txt)
 
-                    aws ecr get-login-password --region $AWS_REGION | \
-                    docker login --username AWS --password-stdin \
-                    $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+                    aws ecr get-login-password --region $AWS_REGION \
+                    | docker login \
+                    --username AWS \
+                    --password-stdin $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
                     '''
                 }
             }
         }
 
-        stage('Create ECR Repositories') {
+        stage('Build Application Images') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-jenkins-creds']]) {
                     script {
-                        for (svc in APP_SERVICES) {
+
+                        def services = env.APP_SERVICES.split(" ")
+
+                        for (svc in services) {
+
                             sh """
-                            ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text)
+                            ACCOUNT_ID=\$(cat account_id.txt)
 
-                            aws ecr describe-repositories \
-                              --repository-names ${REPO_NAME}/${svc} \
-                              --region ${AWS_REGION} || \
+                            echo "Building ${svc}"
 
-                            aws ecr create-repository \
-                              --repository-name ${REPO_NAME}/${svc} \
-                              --region ${AWS_REGION}
+                            if [ -d services/${svc} ]; then
+                                docker build -t ${svc}:${BUILD_NUMBER} services/${svc}
+                            elif [ -d ${svc} ]; then
+                                docker build -t ${svc}:${BUILD_NUMBER} ${svc}
+                            else
+                                echo "Skipping ${svc} (folder not found)"
+                                exit 0
+                            fi
+
+                            docker tag ${svc}:${BUILD_NUMBER} \
+                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}/${svc}:${BUILD_NUMBER}
+
+                            docker push \
+                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}/${svc}:${BUILD_NUMBER}
                             """
                         }
+
                     }
                 }
             }
         }
 
-        stage('Build & Push Docker Images') {
+        stage('Push Infrastructure Images') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-jenkins-creds']]) {
                     script {
-                        for (svc in APP_SERVICES) {
+
+                        def infra = env.INFRA_SERVICES.split(" ")
+
+                        for (svc in infra) {
 
                             sh """
-                            ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text)
+                            ACCOUNT_ID=\$(cat account_id.txt)
 
-                            echo "Building ${svc}"
+                            echo "Processing infra image ${svc}"
 
-                            docker build -t ${svc}:${BUILD_NUMBER} services/${svc}
+                            docker pull ${svc}:latest || docker pull ${svc}:5
 
-                            docker tag ${svc}:${BUILD_NUMBER} \
-                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${REPO_NAME}/${svc}:${BUILD_NUMBER}
+                            docker tag ${svc}:latest \
+                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}/${svc}:latest || true
 
                             docker push \
-                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${REPO_NAME}/${svc}:${BUILD_NUMBER}
+                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}/${svc}:latest || true
                             """
                         }
+
                     }
                 }
             }
@@ -103,7 +127,7 @@ pipeline {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-jenkins-creds']]) {
                     sh '''
-                    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+                    ACCOUNT_ID=$(cat account_id.txt)
 
                     aws eks update-kubeconfig \
                     --region $AWS_REGION \
@@ -114,10 +138,10 @@ pipeline {
 
                     kubectl apply -f K8s/ -n $NAMESPACE
 
-                    for svc in $(ls services)
+                    for svc in $APP_SERVICES
                     do
                       kubectl set image deployment/$svc \
-                      $svc=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$REPO_NAME/$svc:$BUILD_NUMBER \
+                      $svc=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO/$svc:$BUILD_NUMBER \
                       -n $NAMESPACE || true
                     done
                     '''
