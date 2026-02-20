@@ -6,6 +6,8 @@ pipeline {
         NAMESPACE = "robot-shop"
         APP_SERVICES = "user cart shipping payment ratings dispatch web"
         INFRA_SERVICES = "mysql mongo redis rabbitmq"
+        CLUSTER_NAME = "devops-cluster"
+        ECR_REPO = "robot-shop"
     }
 
     stages {
@@ -40,13 +42,15 @@ pipeline {
                             sh """
                             ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text)
 
-                            docker build -t ${svc}:${BUILD_NUMBER} ${svc}
+                            echo "Building service: ${svc}"
+
+                            docker build -t ${svc}:${BUILD_NUMBER} services/${svc}
 
                             docker tag ${svc}:${BUILD_NUMBER} \
-                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/robot-shop/${svc}:${BUILD_NUMBER}
+                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}/${svc}:${BUILD_NUMBER}
 
                             docker push \
-                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/robot-shop/${svc}:${BUILD_NUMBER}
+                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}/${svc}:${BUILD_NUMBER}
                             """
                         }
                     }
@@ -64,13 +68,15 @@ pipeline {
                             sh """
                             ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text)
 
-                            docker pull ${svc}:latest || docker pull ${svc}:5
+                            echo "Processing infra service: ${svc}"
+
+                            docker pull ${svc}:latest || docker pull ${svc}:5 || true
 
                             docker tag ${svc}:latest \
-                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/robot-shop/${svc}:latest || true
+                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}/${svc}:latest || true
 
                             docker push \
-                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/robot-shop/${svc}:latest || true
+                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}/${svc}:latest || true
                             """
                         }
                     }
@@ -84,7 +90,7 @@ pipeline {
                     sh '''
                     ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
-                    aws eks update-kubeconfig --region $AWS_REGION --name devops-cluster
+                    aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
 
                     kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 
@@ -93,7 +99,7 @@ pipeline {
                     for svc in $APP_SERVICES
                     do
                       kubectl set image deployment/$svc \
-                      $svc=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/robot-shop/$svc:$BUILD_NUMBER \
+                      $svc=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO/$svc:$BUILD_NUMBER \
                       -n $NAMESPACE || true
                     done
                     '''
