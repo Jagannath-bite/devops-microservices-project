@@ -3,18 +3,38 @@ pipeline {
 
     environment {
         AWS_REGION = "ap-southeast-1"
-        NAMESPACE = "robot-shop"
-        APP_SERVICES = "user cart shipping payment ratings dispatch web"
-        INFRA_SERVICES = "mysql mongo redis rabbitmq"
         CLUSTER_NAME = "devops-cluster"
-        ECR_REPO = "robot-shop"
+        NAMESPACE = "robot-shop"
+        REPO_NAME = "robot-shop"
     }
 
     stages {
 
-        stage('Checkout') {
+        stage('Checkout Code') {
             steps {
-                git branch: 'main', url: 'https://github.com/Jagannath-bite/devops-microservices-project.git'
+                git branch: 'main',
+                url: 'https://github.com/Jagannath-bite/devops-microservices-project.git'
+            }
+        }
+
+        stage('Detect Services') {
+            steps {
+                script {
+                    APP_SERVICES = sh(
+                        script: "ls services",
+                        returnStdout: true
+                    ).trim().split()
+                }
+            }
+        }
+
+        stage('Configure AWS') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-jenkins-creds']]) {
+                    sh '''
+                    aws sts get-caller-identity
+                    '''
+                }
             }
         }
 
@@ -32,25 +52,21 @@ pipeline {
             }
         }
 
-        stage('Build & Push Application Images') {
+        stage('Create ECR Repositories') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-jenkins-creds']]) {
                     script {
-                        def services = env.APP_SERVICES.split(" ")
-
-                        for (svc in services) {
+                        for (svc in APP_SERVICES) {
                             sh """
                             ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text)
 
-                            echo "Building service: ${svc}"
+                            aws ecr describe-repositories \
+                              --repository-names ${REPO_NAME}/${svc} \
+                              --region ${AWS_REGION} || \
 
-                            docker build -t ${svc}:${BUILD_NUMBER} services/${svc}
-
-                            docker tag ${svc}:${BUILD_NUMBER} \
-                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}/${svc}:${BUILD_NUMBER}
-
-                            docker push \
-                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}/${svc}:${BUILD_NUMBER}
+                            aws ecr create-repository \
+                              --repository-name ${REPO_NAME}/${svc} \
+                              --region ${AWS_REGION}
                             """
                         }
                     }
@@ -58,25 +74,24 @@ pipeline {
             }
         }
 
-        stage('Push Infrastructure Images to ECR') {
+        stage('Build & Push Docker Images') {
             steps {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-jenkins-creds']]) {
                     script {
-                        def infra = env.INFRA_SERVICES.split(" ")
+                        for (svc in APP_SERVICES) {
 
-                        for (svc in infra) {
                             sh """
                             ACCOUNT_ID=\$(aws sts get-caller-identity --query Account --output text)
 
-                            echo "Processing infra service: ${svc}"
+                            echo "Building ${svc}"
 
-                            docker pull ${svc}:latest || docker pull ${svc}:5 || true
+                            docker build -t ${svc}:${BUILD_NUMBER} services/${svc}
 
-                            docker tag ${svc}:latest \
-                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}/${svc}:latest || true
+                            docker tag ${svc}:${BUILD_NUMBER} \
+                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${REPO_NAME}/${svc}:${BUILD_NUMBER}
 
                             docker push \
-                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}/${svc}:latest || true
+                            \$ACCOUNT_ID.dkr.ecr.${AWS_REGION}.amazonaws.com/${REPO_NAME}/${svc}:${BUILD_NUMBER}
                             """
                         }
                     }
@@ -90,30 +105,36 @@ pipeline {
                     sh '''
                     ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
-                    aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
+                    aws eks update-kubeconfig \
+                    --region $AWS_REGION \
+                    --name $CLUSTER_NAME
 
-                    kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+                    kubectl create namespace $NAMESPACE \
+                    --dry-run=client -o yaml | kubectl apply -f -
 
-                    kubectl apply -f k8/ -n $NAMESPACE
+                    kubectl apply -f K8s/ -n $NAMESPACE
 
-                    for svc in $APP_SERVICES
+                    for svc in $(ls services)
                     do
                       kubectl set image deployment/$svc \
-                      $svc=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO/$svc:$BUILD_NUMBER \
+                      $svc=$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$REPO_NAME/$svc:$BUILD_NUMBER \
                       -n $NAMESPACE || true
                     done
                     '''
                 }
             }
         }
+
     }
 
     post {
+
         success {
-            echo 'Deployment Successful 🚀'
+            echo "Deployment Successful"
         }
+
         failure {
-            echo 'Pipeline Failed ❌'
+            echo "Pipeline Failed"
         }
     }
 }
